@@ -255,6 +255,8 @@ type connectorInfo struct {
 	Type string
 }
 
+type providerID string
+
 type byName []connectorInfo
 
 func (n byName) Len() int           { return len(n) }
@@ -283,13 +285,17 @@ func (t *templates) deviceSuccess(r *http.Request, w http.ResponseWriter, client
 }
 
 func (t *templates) login(r *http.Request, w http.ResponseWriter, connectors []connectorInfo) error {
+	var providerIDs []providerID
+
 	sort.Sort(byName(connectors))
 	data := struct {
 		Connectors []connectorInfo
 		ReqPath    string
-	}{connectors, r.URL.Path}
+        ProviderID []providerID
+	}{connectors, r.URL.Path, providerIDs}
 	return renderTemplate(w, t.loginTmpl, data)
 }
+
 
 func (t *templates) password(r *http.Request, w http.ResponseWriter, postURL, lastUsername, usernamePrompt string, lastWasInvalid bool, backLink string) error {
 	if lastWasInvalid {

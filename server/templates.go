@@ -22,6 +22,7 @@ const (
 	tmplError         = "error.html"
 	tmplDevice        = "device.html"
 	tmplDeviceSuccess = "device_success.html"
+	tmplSelectProvider = "select_provider.html"
 )
 
 var requiredTmpls = []string{
@@ -32,6 +33,7 @@ var requiredTmpls = []string{
 	tmplError,
 	tmplDevice,
 	tmplDeviceSuccess,
+	tmplSelectProvider,
 }
 
 type templates struct {
@@ -42,6 +44,7 @@ type templates struct {
 	errorTmpl         *template.Template
 	deviceTmpl        *template.Template
 	deviceSuccessTmpl *template.Template
+	select_providerTmpl *template.Template
 }
 
 type webConfig struct {
@@ -169,6 +172,7 @@ func loadTemplates(c webConfig, templatesDir string) (*templates, error) {
 		errorTmpl:         tmpls.Lookup(tmplError),
 		deviceTmpl:        tmpls.Lookup(tmplDevice),
 		deviceSuccessTmpl: tmpls.Lookup(tmplDeviceSuccess),
+		select_providerTmpl: tmpls.Lookup(tmplSelectProvider),
 	}, nil
 }
 
@@ -296,6 +300,17 @@ func (t *templates) login(r *http.Request, w http.ResponseWriter, connectors []c
 	return renderTemplate(w, t.loginTmpl, data)
 }
 
+func (t *templates) select_provider(r *http.Request, w http.ResponseWriter, connectors []connectorInfo) error {
+	var providerIDs []providerID
+
+	sort.Sort(byName(connectors))
+	data := struct {
+		Connectors []connectorInfo
+		ReqPath    string
+        ProviderID []providerID
+	}{connectors, r.URL.Path, providerIDs}
+	return renderTemplate(w, t.select_providerTmpl, data)
+}
 
 func (t *templates) password(r *http.Request, w http.ResponseWriter, postURL, lastUsername, usernamePrompt string, lastWasInvalid bool, backLink string) error {
 	if lastWasInvalid {

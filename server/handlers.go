@@ -187,158 +187,57 @@ func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) processSelectedConnector(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Request) {
+	// Extract the arguments
+	if err := r.ParseForm(); err != nil {
+		s.logger.Errorf("Failed to parse arguments: %v", err)
+
+		s.renderError(r, w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Handle form submission
     if r.Method == http.MethodPost {
         r.ParseForm()
         selectedConnectorIDs := r.Form["providerID[]"]
-		fmt.Println("selectedConnectorIDs:", selectedConnectorIDs)
-		fmt.Println("This is r:", r)
 
+		connectorInfoSelect := make([]connectorInfo, len(selectedConnectorIDs))
+		count := 0
+		for _, selectedConnector := range selectedConnectorIDs {
+			parts := strings.Split(selectedConnector, "___")
+			connectorID := parts[0]
+			connectorURL := parts[1]
 
-		for index, provider := range selectedConnectorIDs {
-			
-			fmt.Println("Privider",index," : ", provider)
-			// Split the provider string into ID and URL using strings.Split
-			var providerID string
-            var providerURL string
-            parts := strings.Split(provider, "_")
-            if len(parts) == 2 {
-                providerID = parts[0]
-                providerURL = parts[1]
-			}
-
-			connID := providerID
-			ctx := r.Context()
-
-			// Parse the authorization request
-			authReq, err := oidc.ParseAuthorizationRequest(providerURL)
+			connectors, err := s.storage.ListConnectors()
 			if err != nil {
-				fmt.Println("Error parsing authorization request:", err)
+				s.logger.Errorf("Failed to get list of connectors: %v", err)
+				s.renderError(r, w, http.StatusInternalServerError, "Failed to retrieve connector list.")
 				return
 			}
-
-			// authReq, err := s.parseAuthorizationRequest(providerURL)
-			// if err != nil {
-			// 	s.logger.Errorf("Failed to parse authorization request: %v", err)
-	
-			// 	switch authErr := err.(type) {
-			// 	case *redirectedAuthErr:
-			// 		authErr.Handler().ServeHTTP(w, r)
-			// 	case *displayedAuthErr:
-			// 		s.renderError(r, w, authErr.Status, err.Error())
-			// 	default:
-			// 		panic("unsupported error type")
-			// 	}
-	
-			// 	return
-			// }
-
-
-			authReq.ConnectorID = connID
-			fmt.Println("This is authReq.ConnectorID231:", authReq.ConnectorID)
-
-			conn, err := s.getConnector(connID)
-			if err != nil {
-				s.logger.Errorf("Failed to get connector: %v", err)
-				s.renderError(r, w, http.StatusBadRequest, "Requested resource does not exist")
-				return
+		
+			// Construct a URL with all of the arguments in its query
+			connURL := url.URL{
+				RawQuery: r.Form.Encode(),
 			}
 
-			// Actually create the auth request
-			authReq.Expiry = s.now().Add(s.authRequestsValidFor)
-			if err := s.storage.CreateAuthRequest(ctx, *authReq); err != nil {
-				s.logger.Errorf("Failed to create authorization request: %v", err)
-				s.renderError(r, w, http.StatusInternalServerError, "Failed to connect to the database.")
-				return
-			}
-
-			scopes := parseScopes(authReq.Scopes)
-
-			// Work out where the "Select another login method" link should go.
-			backLink := ""
-			if len(s.connectors) > 1 {
-				backLinkURL := url.URL{
-					Path:     s.absPath("/auth"),
-					RawQuery: r.Form.Encode(),
-				}
-				backLink = backLinkURL.String()
-			}
-
-			switch r.Method {
-			case http.MethodGet:
-				switch conn := conn.Connector.(type) {
-				case connector.CallbackConnector:
-					fmt.Println("This is connector.CallbackConnector")
-					fmt.Println("This is conn", conn)
-					fmt.Println("This is authReq.ID", authReq.ID)
-					
-					// Use the auth request ID as the "state" token.
-					//
-					// TODO(ericchiang): Is this appropriate or should we also be using a nonce?
-					callbackURL, err := conn.LoginURL(scopes, s.absURL("/callback"), authReq.ID)
-					if err != nil {
-						s.logger.Errorf("Connector %q returned error when creating callback: %v", connID, err)
-						s.renderError(r, w, http.StatusInternalServerError, "Login error.")
-						return
+			for _, conn := range connectors {
+				if conn.ID == connectorID {
+					connURL.Path = s.absPath("/auth", url.PathEscape(conn.ID))
+					connectorInfoSelect[count] = connectorInfo{
+						ID:   conn.ID,
+						Name: conn.Name,
+						Type: conn.Type,
+						URL:  template.URL(connectorURL),
 					}
-					fmt.Println("This is callbackURL", callbackURL)
-					http.Redirect(w, r, callbackURL, http.StatusFound)
-				case connector.PasswordConnector:
-					fmt.Println("This is connector.PasswordConnector")
-					loginURL := url.URL{
-						Path: s.absPath("/auth", connID, "login"),
-					}
-					q := loginURL.Query()
-					q.Set("state", authReq.ID)
-					q.Set("back", backLink)
-					loginURL.RawQuery = q.Encode()
-
-					http.Redirect(w, r, loginURL.String(), http.StatusFound)
-				case connector.SAMLConnector:
-					fmt.Println("This is connector.SAMLConnector")
-					action, value, err := conn.POSTData(scopes, authReq.ID)
-					if err != nil {
-						s.logger.Errorf("Creating SAML data: %v", err)
-						s.renderError(r, w, http.StatusInternalServerError, "Connector Login Error")
-						return
-					}
-
-					// TODO(ericchiang): Don't inline this.
-					fmt.Fprintf(w, `<!DOCTYPE html>
-					<html lang="en">
-					<head>
-						<meta http-equiv="content-type" content="text/html; charset=utf-8">
-						<title>SAML login</title>
-					</head>
-					<body>
-						<form method="post" action="%s" >
-							<input type="hidden" name="SAMLRequest" value="%s" />
-							<input type="hidden" name="RelayState" value="%s" />
-						</form>
-						<script>
-							document.forms[0].submit();
-						</script>
-					</body>
-					</html>`, action, value, authReq.ID)
-				default:
-					fmt.Println("This is default1")
-					s.renderError(r, w, http.StatusBadRequest, "Requested resource does not exist.")
+					count++
 				}
-			default:
-				fmt.Println("This is default2")
-				s.renderError(r, w, http.StatusBadRequest, "Unsupported request method.")
 			}
-				}
-				
-
-        // Handle invalid or no connectors selected
-        http.Error(w, "Invalid connectors selected", http.StatusBadRequest)
-        return
-    }
+		}
+		if err := s.templates.select_provider(r, w, connectorInfoSelect); err != nil {
+			s.logger.Errorf("Server template error: %v", err)
+		}
+	}
 }
-
-
 
 func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -359,7 +258,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connID, err := url.PathUnescape(mux.Vars(r)["connector"])
-	fmt.Println("This is connID208: ",connID)
 	if err != nil {
 		s.logger.Errorf("Failed to parse connector: %v", err)
 		s.renderError(r, w, http.StatusBadRequest, "Requested resource does not exist")
@@ -382,7 +280,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authReq.ConnectorID = connID
-	fmt.Println("This is authReq.ConnectorID231:", authReq.ConnectorID)
 
 	// Actually create the auth request
 	authReq.Expiry = s.now().Add(s.authRequestsValidFor)
@@ -408,9 +305,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		switch conn := conn.Connector.(type) {
 		case connector.CallbackConnector:
-			fmt.Println("This is connector.CallbackConnector")
-			fmt.Println("This is conn", conn)
-			fmt.Println("This is authReq.ID", authReq.ID)
 			
 			// Use the auth request ID as the "state" token.
 			//
@@ -421,10 +315,8 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 				s.renderError(r, w, http.StatusInternalServerError, "Login error.")
 				return
 			}
-			fmt.Println("This is callbackURL", callbackURL)
 			http.Redirect(w, r, callbackURL, http.StatusFound)
 		case connector.PasswordConnector:
-			fmt.Println("This is connector.PasswordConnector")
 			loginURL := url.URL{
 				Path: s.absPath("/auth", connID, "login"),
 			}
@@ -435,7 +327,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 
 			http.Redirect(w, r, loginURL.String(), http.StatusFound)
 		case connector.SAMLConnector:
-			fmt.Println("This is connector.SAMLConnector")
 			action, value, err := conn.POSTData(scopes, authReq.ID)
 			if err != nil {
 				s.logger.Errorf("Creating SAML data: %v", err)
@@ -461,11 +352,9 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 			  </body>
 			  </html>`, action, value, authReq.ID)
 		default:
-			fmt.Println("This is default1")
 			s.renderError(r, w, http.StatusBadRequest, "Requested resource does not exist.")
 		}
 	default:
-		fmt.Println("This is default2")
 		s.renderError(r, w, http.StatusBadRequest, "Unsupported request method.")
 	}
 }
@@ -569,13 +458,11 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	var authID string
 	switch r.Method {
 	case http.MethodGet: // OAuth2 callback
-		fmt.Println("This is http.MethodGet")
 		if authID = r.URL.Query().Get("state"); authID == "" {
 			s.renderError(r, w, http.StatusBadRequest, "User session error.")
 			return
 		}
 	case http.MethodPost: // SAML POST binding
-		fmt.Println("This is http.MethodPost")
 		if authID = r.PostFormValue("RelayState"); authID == "" {
 			s.renderError(r, w, http.StatusBadRequest, "User session error.")
 			return
@@ -586,7 +473,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	authReq, err := s.storage.GetAuthRequest(authID)
-	fmt.Println("This is authReq: ",authReq)
 	if err != nil {
 		if err == storage.ErrNotFound {
 			s.logger.Errorf("Invalid 'state' parameter provided: %v", err)
@@ -599,7 +485,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	connID, err := url.PathUnescape(mux.Vars(r)["connector"])
-	fmt.Println("This is connID446: ",connID)
 	if err != nil {
 		s.logger.Errorf("Failed to get connector with id %q : %v", authReq.ConnectorID, err)
 		s.renderError(r, w, http.StatusInternalServerError, "Requested resource does not exist.")
@@ -611,8 +496,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	conn, err := s.getConnector(authReq.ConnectorID)
-	fmt.Println("This is authReq.ConnectorID460:", authReq.ConnectorID)
-	fmt.Println("This is conn:", conn)
 	if err != nil {
 		s.logger.Errorf("Failed to get connector with id %q : %v", authReq.ConnectorID, err)
 		s.renderError(r, w, http.StatusInternalServerError, "Requested resource does not exist.")
@@ -622,7 +505,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	var identity connector.Identity
 	switch conn := conn.Connector.(type) {
 	case connector.CallbackConnector:
-		fmt.Println("This is connector.CallbackConnector:")
 		if r.Method != http.MethodGet {
 			s.logger.Errorf("SAML request mapped to OAuth2 connector")
 			s.renderError(r, w, http.StatusBadRequest, "Invalid request")
@@ -630,7 +512,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		}
 		identity, err = conn.HandleCallback(parseScopes(authReq.Scopes), r)
 	case connector.SAMLConnector:
-		fmt.Println("This is connector.SAMLConnector:")
 		if r.Method != http.MethodPost {
 			s.logger.Errorf("OAuth2 request mapped to SAML connector")
 			s.renderError(r, w, http.StatusBadRequest, "Invalid request")
@@ -638,7 +519,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		}
 		identity, err = conn.HandlePOST(parseScopes(authReq.Scopes), r.PostFormValue("SAMLResponse"), authReq.ID)
 	default:
-		fmt.Println("This is default")
 		s.renderError(r, w, http.StatusInternalServerError, "Requested resource does not exist.")
 		return
 	}
@@ -650,9 +530,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	redirectURL, canSkipApproval, err := s.finalizeLogin(ctx, identity, authReq, conn.Connector)
-	fmt.Println("This is identity:", identity)
-	fmt.Println("This is redirectURL:", redirectURL)
-	fmt.Println("This is canSkipApproval:", canSkipApproval)
 	if err != nil {
 		s.logger.Errorf("Failed to finalize login: %v", err)
 		s.renderError(r, w, http.StatusInternalServerError, "Login error.")

@@ -6,13 +6,13 @@
     <form action="/auth/selectProvider" method="post">
     {{ range $c := .Connectors }}
       <div class="theme-form-row">
-        <input type="checkbox" name="providerID[]" value="{{$c.ID}}___{{$c.URL}}">
-        <a href="{{ $c.URL }}" target="_self">
-          <button class="dex-btn theme-btn-provider">
+        <input type="checkbox" id="{{$c.ID}}" name="providerID[]" value="{{$c.ID}}___{{$c.URL}}">
+        <button type="button" class="dex-btn theme-btn-provider">
+          <label for="{{$c.ID}}">
             <span class="dex-btn-icon dex-btn-icon--{{ $c.Type }}"></span>
             <span class="dex-btn-text">Log in with {{ $c.Name }}</span>
-          </button>
-        </a>
+          </label>
+        </button>
       </div>
     {{ end }}
     <input type="submit" value="submit">

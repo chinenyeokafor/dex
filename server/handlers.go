@@ -189,7 +189,6 @@ func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("handleAuthorizationSelect Called")
 	// Extract the arguments
 	if err := r.ParseForm(); err != nil {
 		s.logger.Errorf("Failed to parse arguments: %v", err)
@@ -202,56 +201,18 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
     if r.Method == http.MethodPost {
         r.ParseForm()
         selectedConnectorIDs := r.Form["providerID[]"]
-		var arrID []string
 
-		// Reading cookies
-		cookie, err := r.Cookie(cookie_name)
-		fmt.Println("This is fresh cookie", cookie)
-		fmt.Println("This is fresh cookie", cookie)
-		if err == nil {
-			selectedConnectorCookieIDs := strings.Split(cookie.Value, ",")
-			arrCookieID := make([]string, len(selectedConnectorCookieIDs))
-			for index, selectedID := range selectedConnectorCookieIDs {
-				arrCookieID[index] = strings.Split(selectedID, "___")[0]
-			}
-			fmt.Println("This is cookie", cookie)
-			fmt.Println("This is arrID", arrCookieID)
-
-			arrID = make([]string, len(selectedConnectorCookieIDs))
-			countArrID := 0
-			for _, selectedConnectorID := range selectedConnectorIDs{
-				 id := strings.Split(selectedConnectorID, "___")[0];
-			fmt.Println("This is strings id", id)
-
-				 for _, cookieId := range arrCookieID {
-					fmt.Println("--------------------start-----------------")
-			fmt.Println("This is cookieId", cookieId)
-			fmt.Println("This is id", id)
-			fmt.Println("--------------------end-----------------")
-					if id == strings.TrimSpace(cookieId) {
-						fmt.Println("This is a match")
-						arrID[countArrID] = selectedConnectorID
-						countArrID++
-					}
-				}
-				
-			}
-			selectedConnectorIDs = arrID
-			fmt.Println("This is the cookie in handleAuthorizationSelect", cookie.Value)
-		} else {
-			// Setting cookie
-			cookie := http.Cookie{
-				Name:  cookie_name,
-				Value: strings.Join(selectedConnectorIDs, ","),
-			}
-			http.SetCookie(w, &cookie)
-			fmt.Println("Cookie set:", cookie.Value)
+		//Utilize a cookie to store the selected but unauthenticated provider.
+		// Setting cookie
+		cookie := http.Cookie{
+			Name:  cookie_name,
+			Value: strings.Join(selectedConnectorIDs, ","),
 		}
-		fmt.Println("This is the arrID in handleAuthorizationSelect", arrID)
+		http.SetCookie(w, &cookie)
+
 		connectorInfoSelect := make([]connectorInfo, len(selectedConnectorIDs))
 		count := 0
 		for _, selectedConnector := range selectedConnectorIDs {
-		fmt.Println("This is the selectedConnector in handleAuthorizationSelect", selectedConnector)
 
 			parts := strings.Split(selectedConnector, "___")
 			connectorID := parts[0]
@@ -272,8 +233,6 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 			for _, conn := range connectors {
 				if conn.ID == connectorID {
 					connURL.Path = s.absPath("/auth", url.PathEscape(conn.ID))
-					fmt.Println("This is connURL.Path:", connURL.Path)
-					fmt.Println("This URL:", connectorURL)
 					connectorInfoSelect[count] = connectorInfo{
 						ID:   conn.ID,
 						Name: conn.Name,
@@ -288,29 +247,21 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 			s.logger.Errorf("Server template error: %v", err)
 		}
 	}else {
-		fmt.Println("Nothing else")
+
+		var selectedConnectorCookieIDs []string
 
 		// Reading cookies
 		cookie, err := r.Cookie(cookie_name)
-		fmt.Println("This is fresh cookie", cookie)
-		var selectedConnectorCookieIDs []string
 		if err == nil {
 			selectedConnectorCookieIDs = strings.Split(cookie.Value, ",")
-			fmt.Println("This is selectedConnectorCookieIDs", selectedConnectorCookieIDs)
 		}
+
 		connectorInfoSelect := make([]connectorInfo, len(selectedConnectorCookieIDs))
-		fmt.Println("*******Length of connectorInfoSelect:", len(selectedConnectorCookieIDs))
 		count := 0
 		for _, selectedConnector := range selectedConnectorCookieIDs {
-		fmt.Println("This is the selectedConnector in handleAuthorizationSelect", selectedConnector)
-
 			parts := strings.Split(selectedConnector, "___")
 			connectorID := parts[0]
 			connectorURL := parts[1]
-			fmt.Println("----------start----------")
-			fmt.Println("connectorID is:", connectorID)
-			fmt.Println("connectorURL is:", connectorURL)
-			fmt.Println("----------end----------")
 
 			connectors, err := s.storage.ListConnectors()
 			if err != nil {
@@ -324,12 +275,9 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 				RawQuery: r.Form.Encode(),
 			}
 
-			for index, conn := range connectors {
-				fmt.Println(index,"conn.ID is:", conn.ID)
+			for _, conn := range connectors {
 				if conn.ID == strings.TrimSpace(connectorID) {
 					connURL.Path = s.absPath("/auth", url.PathEscape(conn.ID))
-					fmt.Println("This is connURL.Path2:", connURL.Path)
-					fmt.Println("This URL2:", connectorURL)
 					connectorInfoSelect[count] = connectorInfo{
 						ID:   conn.ID,
 						Name: conn.Name,
@@ -655,34 +603,29 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Reading cookies
-	cookie, err := r.Cookie(cookie_name)
-	if err == nil {
-		fmt.Println("This is the cookie", cookie.Value)
-	}
+	cookie, _ := r.Cookie(cookie_name)
 
 	//get providers array 
 	providers := strings.Split(cookie.Value, ",")
 
-	for index, provider := range providers {
-		providerID := strings.Split(provider, "___")[0]
-		if authReq.ConnectorID == providerID {
-			providers = append(providers[:index], providers[index+1:]...) //delete index
-
+	if len(providers) != 1 {
+		for index, provider := range providers {
+			providerID := strings.Split(provider, "___")[0]
+			if authReq.ConnectorID == providerID {
+				providers = append(providers[:index], providers[index+1:]...) //delete index
+			}
 		}
+		// Setting cookie
+		updated_cookie := http.Cookie{
+			Name:  cookie_name,
+			Value: strings.Join(providers, ", "),
+		}
+		http.SetCookie(w, &updated_cookie)
+	
+		http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
+	} else {
+		http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 	}
-	// Setting cookie
-	updated_cookie := http.Cookie{
-		Name:  cookie_name,
-		Value: strings.Join(providers, ", "),
-	}
-	http.SetCookie(w, &updated_cookie)
-	fmt.Println("Updated Cookie set:", updated_cookie.Value)
-
-	fmt.Println("This is updated providers:", providers)
-
-	// http.Redirect(w, r, redirectURL, http.StatusSeeOther)
-	fmt.Println("This is useless redirect", redirectURL)
-	http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
 }
 
 // finalizeLogin associates the user's identity with the current AuthRequest, then returns

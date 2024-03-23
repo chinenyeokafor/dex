@@ -29,10 +29,51 @@ import (
 const (
 	codeChallengeMethodPlain = "plain"
 	codeChallengeMethodS256  = "S256"
-	cookie_name = "mycookie15"
+	selProvCookie = "selectedProviders"
+	selProvCodesCookie = "selProvCodes"
+	
+
 )
 
+func byteToJson (byteArray []byte) string{
+    // Define a map to unmarshal JSON data
+    var data map[string]interface{}
+
+    // Unmarshal JSON data from byte array into the map
+    if err := json.Unmarshal(byteArray, &data); err != nil {
+        fmt.Println("Error:", err)
+        return ""
+    }
+
+    // Marshal the map back to JSON
+    jsonData, err := json.Marshal(data)
+    if err != nil {
+        fmt.Println("Error:", err)
+        return ""
+    }
+
+	return string(jsonData)
+}
+
+func DeleteCookie (w http.ResponseWriter, cookieName string) {
+	expiredCookie := http.Cookie{
+		Name:    cookieName,
+		Value:   "",
+		Expires: time.Unix(0, 0),
+	}
+	// Set the cookie on the response, which effectively deletes it
+	http.SetCookie(w, &expiredCookie)
+}
+
+func SetCookieWithValue (w http.ResponseWriter, cookieName, value string) {
+	Cookie := http.Cookie{
+		Name:  cookieName,
+		Value: value,
+	}
+	http.SetCookie(w, &Cookie)
+}
 func (s *Server) handlePublicKeys(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handlePublicKeys is called ********************")
 	// TODO(ericchiang): Cache this.
 	keys, err := s.storage.GetKeys()
 	if err != nil {
@@ -51,6 +92,7 @@ func (s *Server) handlePublicKeys(w http.ResponseWriter, r *http.Request) {
 		Keys: make([]jose.JSONWebKey, len(keys.VerificationKeys)+1),
 	}
 	jwks.Keys[0] = *keys.SigningKeyPub
+	fmt.Println("Project dex This is keys:%+v", keys)
 	for i, verificationKey := range keys.VerificationKeys {
 		jwks.Keys[i+1] = *verificationKey.PublicKey
 	}
@@ -69,6 +111,8 @@ func (s *Server) handlePublicKeys(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, must-revalidate", int(maxAge.Seconds())))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+
+	//print json converted data
 	w.Write(data)
 }
 
@@ -90,6 +134,7 @@ type discovery struct {
 }
 
 func (s *Server) discoveryHandler() (http.HandlerFunc, error) {
+	fmt.Println("Project dex discoveryHandler is called ********************")
 	d := discovery{
 		Issuer:            s.issuerURL.String(),
 		Auth:              s.absURL("/auth"),
@@ -129,6 +174,7 @@ func (s *Server) discoveryHandler() (http.HandlerFunc, error) {
 
 // handleAuthorization handles the OAuth2 auth endpoint.
 func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleAuthorization is called ********************")
 	// Extract the arguments
 	if err := r.ParseForm(); err != nil {
 		s.logger.Errorf("Failed to parse arguments: %v", err)
@@ -189,6 +235,7 @@ func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleAuthorizationSelect is called ********************")
 	// Extract the arguments
 	if err := r.ParseForm(); err != nil {
 		s.logger.Errorf("Failed to parse arguments: %v", err)
@@ -205,7 +252,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 		//Utilize a cookie to store the selected but unauthenticated provider.
 		// Setting cookie
 		cookie := http.Cookie{
-			Name:  cookie_name,
+			Name:  selProvCookie,
 			Value: strings.Join(selectedConnectorIDs, ","),
 		}
 		http.SetCookie(w, &cookie)
@@ -251,7 +298,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 		var selectedConnectorCookieIDs []string
 
 		// Reading cookies
-		cookie, err := r.Cookie(cookie_name)
+		cookie, err := r.Cookie(selProvCookie)
 		if err == nil {
 			selectedConnectorCookieIDs = strings.Split(cookie.Value, ",")
 		}
@@ -295,6 +342,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleConnectorLogin is called ********************")
 	ctx := r.Context()
 	authReq, err := s.parseAuthorizationRequest(r)
 	if err != nil {
@@ -415,6 +463,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handlePasswordLogin is called ******************** ********************")
 	ctx := r.Context()
 	authID := r.URL.Query().Get("state")
 	if authID == "" {
@@ -509,6 +558,7 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleConnectorCallback is called ******************** ********************")
 	ctx := r.Context()
 	var authID string
 	switch r.Method {
@@ -602,35 +652,37 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Reading cookies
-	cookie, _ := r.Cookie(cookie_name)
+	// // Reading cookies
+	// cookie, _ := r.Cookie(selProvCookie)
 
-	//get providers array 
-	providers := strings.Split(cookie.Value, ",")
+	// //get providers array 
+	// providers := strings.Split(cookie.Value, ",")
 
-	if len(providers) != 1 {
-		for index, provider := range providers {
-			providerID := strings.Split(provider, "___")[0]
-			if authReq.ConnectorID == providerID {
-				providers = append(providers[:index], providers[index+1:]...) //delete index
-			}
-		}
-		// Setting cookie
-		updated_cookie := http.Cookie{
-			Name:  cookie_name,
-			Value: strings.Join(providers, ", "),
-		}
-		http.SetCookie(w, &updated_cookie)
+	// if len(providers) != 1 {
+	// 	for index, provider := range providers {
+	// 		providerID := strings.Split(provider, "___")[0]
+	// 		if authReq.ConnectorID == providerID {
+	// 			providers = append(providers[:index], providers[index+1:]...) //delete index
+	// 		}
+	// 	}
+	// 	// Setting cookie
+	// 	updated_cookie := http.Cookie{
+	// 		Name:  selProvCookie,
+	// 		Value: strings.Join(providers, ", "),
+	// 	}
+	// 	http.SetCookie(w, &updated_cookie)
 	
-		http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
-	} else {
-		http.Redirect(w, r, redirectURL, http.StatusSeeOther)
-	}
+	// 	http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
+	// } else {
+	// 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+	// }
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 // finalizeLogin associates the user's identity with the current AuthRequest, then returns
 // the approval page's path.
 func (s *Server) finalizeLogin(ctx context.Context, identity connector.Identity, authReq storage.AuthRequest, conn connector.Connector) (string, bool, error) {
+	fmt.Println("Project dex finalizeLogin is called ********************")
 	claims := storage.Claims{
 		UserID:            identity.UserID,
 		Username:          identity.Username,
@@ -725,6 +777,7 @@ func (s *Server) finalizeLogin(ctx context.Context, identity connector.Identity,
 }
 
 func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleApproval is called ********************")
 	macEncoded := r.FormValue("hmac")
 	if macEncoded == "" {
 		s.renderError(r, w, http.StatusUnauthorized, "Unauthorized request")
@@ -779,6 +832,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authReq storage.AuthRequest) {
+	fmt.Println("Project dex sendCodeResponse is called ********************")
 	ctx := r.Context()
 	if s.now().After(authReq.Expiry) {
 		s.renderError(r, w, http.StatusBadRequest, "User session has expired.")
@@ -795,6 +849,7 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		return
 	}
 	u, err := url.Parse(authReq.RedirectURI)
+	// fmt.Println("Project dex This is u in sendCodeResponse:" u)
 	if err != nil {
 		s.renderError(r, w, http.StatusInternalServerError, "Invalid redirect URI.")
 		return
@@ -868,8 +923,9 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		}
 	}
 
+	q := u.Query()
+	v := url.Values{}
 	if implicitOrHybrid {
-		v := url.Values{}
 		v.Set("access_token", accessToken)
 		v.Set("token_type", "bearer")
 		v.Set("state", authReq.State)
@@ -898,7 +954,7 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		//     &expires_in=3600
 		//     &state=af0ifjsldkj
 		//
-		u.Fragment = v.Encode()
+		// u.Fragment = v.Encode()
 	} else {
 		// The code flow add values to the URL query.
 		//
@@ -907,16 +963,82 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		//     code=SplxlOBeZQQYbYS6WxSbIA
 		//     &state=af0ifjsldkj
 		//
-		q := u.Query()
+		// q := u.Query()
 		q.Set("code", code.ID)
 		q.Set("state", authReq.State)
-		u.RawQuery = q.Encode()
+		// u.RawQuery = q.Encode()
+	}
+	fmt.Println("Project dex ------------------------------------")
+	fmt.Println("Project dex This is code2:", code.ID)
+	fmt.Println("Project dex This is state2:", authReq.State)
+	fmt.Println("Project dex This is idToken2:", idToken)
+	fmt.Println("Project dex This is idTokenExpiry2:", idTokenExpiry)
+	fmt.Println("Project dex This is code.RedirectURI", code.RedirectURI)
+	fmt.Println("Project dex This is u.String()", u.String())
+	fmt.Println("Project dex ------------------------------------")
+
+	// Reading selected provider cookies
+	cookie, _ := r.Cookie(selProvCookie)
+	providers := strings.Split(cookie.Value, ",")
+
+	codeIDArr := []string{}
+	// Reading selected provider code cookie
+	codeCookie, err := r.Cookie(selProvCodesCookie)
+	if err == nil {
+		codes := strings.Split(codeCookie.Value, ",")
+		codeIDArr = append(codes, code.ID)
+		fmt.Println("*********codes: ",codes )
+		fmt.Println("*********newCodes: ",codeIDArr )
+
+		if len(providers) == 1 {
+			DeleteCookie(w, selProvCodesCookie) 
+		} else {
+			CodeIDStr := strings.Join(codeIDArr, ",")
+			SetCookieWithValue(w, selProvCodesCookie, CodeIDStr)
+		}
+	} else {
+		// Setting cookie
+		codeIDArr = append(codeIDArr,code.ID)
+		fmt.Println("*********codeIDArr: ", codeIDArr)
+
+		if len(providers) == 1 {
+			DeleteCookie(w, selProvCodesCookie) 
+		} else {
+			CodeIDStr := strings.Join(codeIDArr, ",")
+			SetCookieWithValue(w, selProvCodesCookie, CodeIDStr)
+		}
 	}
 
-	http.Redirect(w, r, u.String(), http.StatusSeeOther)
+
+	if len(providers) != 1 {
+		for index, provider := range providers {
+			providerID := strings.Split(provider, "___")[0]
+			if authReq.ConnectorID == providerID {
+				providers = append(providers[:index], providers[index+1:]...) //delete index
+			}
+		}
+		// Setting cookie
+		CodeIDStr := strings.Join(providers, ",")
+		SetCookieWithValue(w, selProvCookie, CodeIDStr)
+		http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
+	} else {
+		fmt.Println("All the codes are: ",codeIDArr )
+
+		if implicitOrHybrid {
+			q.Set("code", strings.Join(codeIDArr, ","))
+			u.Fragment = v.Encode()
+		} else {
+			q.Set("code", strings.Join(codeIDArr, ","))
+			u.RawQuery = q.Encode()
+		}
+		fmt.Println("Project dex This is u.String()2", u.String())
+		http.Redirect(w, r, u.String(), http.StatusSeeOther)
+	}
+	// http.Redirect(w, r, u.String(), http.StatusSeeOther)
 }
 
 func (s *Server) withClientFromStorage(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request, storage.Client)) {
+	fmt.Println("Project dex withClientFromStorage is called ********************")
 	clientID, clientSecret, ok := r.BasicAuth()
 	if ok {
 		var err error
@@ -958,6 +1080,7 @@ func (s *Server) withClientFromStorage(w http.ResponseWriter, r *http.Request, h
 }
 
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleToken is called ********************")
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
 		s.tokenErrHelper(w, errInvalidRequest, "method not allowed", http.StatusBadRequest)
@@ -994,6 +1117,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) calculateCodeChallenge(codeVerifier, codeChallengeMethod string) (string, error) {
+	fmt.Println("Project dex calculateCodeChallenge is called ********************")
 	switch codeChallengeMethod {
 	case codeChallengeMethodPlain:
 		return codeVerifier, nil
@@ -1007,6 +1131,7 @@ func (s *Server) calculateCodeChallenge(codeVerifier, codeChallengeMethod string
 
 // handle an access token request https://tools.ietf.org/html/rfc6749#section-4.1.3
 func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client storage.Client) {
+	fmt.Println("Project dex handleAuthCode is called ********************")
 	ctx := r.Context()
 	code := r.PostFormValue("code")
 	redirectURI := r.PostFormValue("redirect_uri")
@@ -1067,6 +1192,7 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
 }
 
 func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, authCode storage.AuthCode, client storage.Client) (*accessTokenResponse, error) {
+	fmt.Println("Project dex exchangeAuthCode is called ********************")
 	accessToken, _, err := s.newAccessToken(client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, authCode.ConnectorID)
 	if err != nil {
 		s.logger.Errorf("failed to create new access token: %v", err)
@@ -1080,6 +1206,7 @@ func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, au
 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
 		return nil, err
 	}
+	fmt.Println("Project dex idToken generated in exchangeAuthCode: ", idToken)
 
 	if err := s.storage.DeleteAuthCode(authCode.ID); err != nil {
 		s.logger.Errorf("failed to delete auth code: %v", err)
@@ -1212,6 +1339,7 @@ func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, au
 }
 
 func (s *Server) handleUserInfo(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Project dex handleUserInfo is called ********************")
 	ctx := r.Context()
 	const prefix = "Bearer "
 
@@ -1241,6 +1369,7 @@ func (s *Server) handleUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePasswordGrant(w http.ResponseWriter, r *http.Request, client storage.Client) {
+	fmt.Println("Project dex handlePasswordGrant is called ********************")
 	ctx := r.Context()
 	// Parse the fields
 	if err := r.ParseForm(); err != nil {
@@ -1468,10 +1597,12 @@ func (s *Server) handlePasswordGrant(w http.ResponseWriter, r *http.Request, cli
 	}
 
 	resp := s.toAccessTokenResponse(idToken, accessToken, refreshToken, expiry)
+	fmt.Println("Project dex This is resp:", resp)
 	s.writeAccessToken(w, resp)
 }
 
 func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request, client storage.Client) {
+	fmt.Println("Project dex handleTokenExchange is called ********************")
 	ctx := r.Context()
 
 	if err := r.ParseForm(); err != nil {
@@ -1568,6 +1699,7 @@ type accessTokenResponse struct {
 }
 
 func (s *Server) toAccessTokenResponse(idToken, accessToken, refreshToken string, expiry time.Time) *accessTokenResponse {
+	fmt.Println("Project dex toAccessTokenResponse is called ********************")
 	return &accessTokenResponse{
 		AccessToken:  accessToken,
 		TokenType:    "bearer",
@@ -1578,6 +1710,8 @@ func (s *Server) toAccessTokenResponse(idToken, accessToken, refreshToken string
 }
 
 func (s *Server) writeAccessToken(w http.ResponseWriter, resp *accessTokenResponse) {
+	fmt.Println("Project dex writeAccessToken is called ********************")
+
 	data, err := json.Marshal(resp)
 	if err != nil {
 		s.logger.Errorf("failed to marshal access token response: %v", err)
@@ -1594,12 +1728,14 @@ func (s *Server) writeAccessToken(w http.ResponseWriter, resp *accessTokenRespon
 }
 
 func (s *Server) renderError(r *http.Request, w http.ResponseWriter, status int, description string) {
+	fmt.Println("Project dex renderError is called ********************")
 	if err := s.templates.err(r, w, status, description); err != nil {
 		s.logger.Errorf("server template error: %v", err)
 	}
 }
 
 func (s *Server) tokenErrHelper(w http.ResponseWriter, typ string, description string, statusCode int) {
+	fmt.Println("Project dex tokenErrHelper is called ********************")
 	if err := tokenErr(w, typ, description, statusCode); err != nil {
 		s.logger.Errorf("token error response: %v", err)
 	}
@@ -1607,6 +1743,7 @@ func (s *Server) tokenErrHelper(w http.ResponseWriter, typ string, description s
 
 // Check for username prompt override from connector. Defaults to "Username".
 func usernamePrompt(conn connector.PasswordConnector) string {
+	fmt.Println("Project dex usernamePrompt is called ********************")
 	if attr := conn.Prompt(); attr != "" {
 		return attr
 	}

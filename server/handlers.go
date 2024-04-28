@@ -29,33 +29,33 @@ import (
 const (
 	codeChallengeMethodPlain = "plain"
 	codeChallengeMethodS256  = "S256"
-	selProvCookie = "selectedProviders"
-	selProvCodesCookie = "selProvCodes"
-	
-
+	selProvCookie            = "selectedProviders"
+	selProvCodesCookie       = "selProvCodes"
 )
 
-func byteToJson (byteArray []byte) string{
-    // Define a map to unmarshal JSON data
-    var data map[string]interface{}
+var userNonce string
 
-    // Unmarshal JSON data from byte array into the map
-    if err := json.Unmarshal(byteArray, &data); err != nil {
-        fmt.Println("Error:", err)
-        return ""
-    }
+func byteToJson(byteArray []byte) string {
+	// Define a map to unmarshal JSON data
+	var data map[string]interface{}
 
-    // Marshal the map back to JSON
-    jsonData, err := json.Marshal(data)
-    if err != nil {
-        fmt.Println("Error:", err)
-        return ""
-    }
+	// Unmarshal JSON data from byte array into the map
+	if err := json.Unmarshal(byteArray, &data); err != nil {
+		fmt.Println("Error:", err)
+		return ""
+	}
+
+	// Marshal the map back to JSON
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return ""
+	}
 
 	return string(jsonData)
 }
 
-func DeleteCookie (w http.ResponseWriter, cookieName string) {
+func DeleteCookie(w http.ResponseWriter, cookieName string) {
 	expiredCookie := http.Cookie{
 		Name:    cookieName,
 		Value:   "",
@@ -65,7 +65,7 @@ func DeleteCookie (w http.ResponseWriter, cookieName string) {
 	http.SetCookie(w, &expiredCookie)
 }
 
-func SetCookieWithValue (w http.ResponseWriter, cookieName, value string) {
+func SetCookieWithValue(w http.ResponseWriter, cookieName, value string) {
 	Cookie := http.Cookie{
 		Name:  cookieName,
 		Value: value,
@@ -92,7 +92,6 @@ func (s *Server) handlePublicKeys(w http.ResponseWriter, r *http.Request) {
 		Keys: make([]jose.JSONWebKey, len(keys.VerificationKeys)+1),
 	}
 	jwks.Keys[0] = *keys.SigningKeyPub
-	fmt.Println("Project dex This is keys:%+v", keys)
 	for i, verificationKey := range keys.VerificationKeys {
 		jwks.Keys[i+1] = *verificationKey.PublicKey
 	}
@@ -135,6 +134,7 @@ type discovery struct {
 
 func (s *Server) discoveryHandler() (http.HandlerFunc, error) {
 	fmt.Println("Project dex discoveryHandler is called ********************")
+
 	d := discovery{
 		Issuer:            s.issuerURL.String(),
 		Auth:              s.absURL("/auth"),
@@ -145,7 +145,7 @@ func (s *Server) discoveryHandler() (http.HandlerFunc, error) {
 		Subjects:          []string{"public"},
 		IDTokenAlgs:       []string{string(jose.RS256)},
 		CodeChallengeAlgs: []string{codeChallengeMethodS256, codeChallengeMethodPlain},
-		Scopes:            []string{"openid", "email", "groups", "profile", "offline_access"},
+		Scopes:            []string{"openid", "email", "groups", "profile", "offline_access", "federated:id"},
 		AuthMethods:       []string{"client_secret_basic", "client_secret_post"},
 		Claims: []string{
 			"iss", "sub", "aud", "iat", "exp", "email", "email_verified",
@@ -184,6 +184,13 @@ func (s *Server) handleAuthorization(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connectorID := r.Form.Get("connector_id")
+	userNonce = r.Form.Get("u_nonce")
+	// Iterate over all key-value pairs in the form
+	fmt.Println("userNonce............:", userNonce)
+	fmt.Println("All form key-value pairs:")
+	for key, value := range r.Form {
+		fmt.Printf("%s: %s\n", key, value)
+	}
 
 	connectors, err := s.storage.ListConnectors()
 	if err != nil {
@@ -245,9 +252,9 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Handle form submission
-    if r.Method == http.MethodPost {
-        r.ParseForm()
-        selectedConnectorIDs := r.Form["providerID[]"]
+	if r.Method == http.MethodPost {
+		r.ParseForm()
+		selectedConnectorIDs := r.Form["providerID[]"]
 
 		//Utilize a cookie to store the selected but unauthenticated provider.
 		// Setting cookie
@@ -271,7 +278,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 				s.renderError(r, w, http.StatusInternalServerError, "Failed to retrieve connector list.")
 				return
 			}
-		
+
 			// Construct a URL with all of the arguments in its query
 			connURL := url.URL{
 				RawQuery: r.Form.Encode(),
@@ -293,7 +300,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 		if err := s.templates.select_provider(r, w, connectorInfoSelect); err != nil {
 			s.logger.Errorf("Server template error: %v", err)
 		}
-	}else {
+	} else {
 
 		var selectedConnectorCookieIDs []string
 
@@ -316,7 +323,7 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 				s.renderError(r, w, http.StatusInternalServerError, "Failed to retrieve connector list.")
 				return
 			}
-		
+
 			// Construct a URL with all of the arguments in its query
 			connURL := url.URL{
 				RawQuery: r.Form.Encode(),
@@ -344,6 +351,19 @@ func (s *Server) handleAuthorizationSelect(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Project dex handleConnectorLogin is called ********************")
 	ctx := r.Context()
+
+	err := r.ParseForm() // Parse the form data
+	if err != nil {
+		fmt.Println("Error parsing form:", err)
+		http.Error(w, "Error parsing form", http.StatusBadRequest)
+		return
+	}
+
+	fmt.Println("All form key-value pairs in handleConnectorLogin:")
+	for key, value := range r.Form {
+		fmt.Printf("%s: %s\n", key, value)
+	}
+
 	authReq, err := s.parseAuthorizationRequest(r)
 	if err != nil {
 		s.logger.Errorf("Failed to parse authorization request: %v", err)
@@ -373,6 +393,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 		s.renderError(r, w, http.StatusBadRequest, "Requested resource does not exist")
 		return
 	}
+	fmt.Println("conn is ", conn)
 
 	// Set the connector being used for the login.
 	if authReq.ConnectorID != "" && authReq.ConnectorID != connID {
@@ -408,7 +429,8 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		switch conn := conn.Connector.(type) {
 		case connector.CallbackConnector:
-			
+			fmt.Println("Hereeeee1")
+
 			// Use the auth request ID as the "state" token.
 			//
 			// TODO(ericchiang): Is this appropriate or should we also be using a nonce?
@@ -418,6 +440,7 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 				s.renderError(r, w, http.StatusInternalServerError, "Login error.")
 				return
 			}
+			fmt.Println("Hereeeee1 callbackURL", callbackURL)
 			http.Redirect(w, r, callbackURL, http.StatusFound)
 		case connector.PasswordConnector:
 			loginURL := url.URL{
@@ -560,6 +583,18 @@ func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Project dex handleConnectorCallback is called ******************** ********************")
 	ctx := r.Context()
+	err := r.ParseForm() // Parse the form data
+	if err != nil {
+		fmt.Println("Error parsing form:", err)
+		http.Error(w, "Error parsing form", http.StatusBadRequest)
+		return
+	}
+
+	fmt.Println("All form key-value pairs in handleConnectorCallback:")
+	for key, value := range r.Form {
+		fmt.Printf("%s: %s\n", key, value)
+	}
+
 	var authID string
 	switch r.Method {
 	case http.MethodGet: // OAuth2 callback
@@ -610,6 +645,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	var identity connector.Identity
 	switch conn := conn.Connector.(type) {
 	case connector.CallbackConnector:
+		fmt.Println("Hereeeee1a")
 		if r.Method != http.MethodGet {
 			s.logger.Errorf("SAML request mapped to OAuth2 connector")
 			s.renderError(r, w, http.StatusBadRequest, "Invalid request")
@@ -655,7 +691,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// // Reading cookies
 	// cookie, _ := r.Cookie(selProvCookie)
 
-	// //get providers array 
+	// //get providers array
 	// providers := strings.Split(cookie.Value, ",")
 
 	// if len(providers) != 1 {
@@ -671,7 +707,7 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	// 		Value: strings.Join(providers, ", "),
 	// 	}
 	// 	http.SetCookie(w, &updated_cookie)
-	
+
 	// 	http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
 	// } else {
 	// 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
@@ -726,7 +762,6 @@ func (s *Server) finalizeLogin(ctx context.Context, identity connector.Identity,
 	if !ok {
 		return returnURL, false, nil
 	}
-
 	offlineAccessRequested := false
 	for _, scope := range authReq.Scopes {
 		if scope == scopeOfflineAccess {
@@ -800,7 +835,6 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 		s.renderError(r, w, http.StatusInternalServerError, "Login process not yet finalized.")
 		return
 	}
-
 	// build expected hmac with secret key
 	h := hmac.New(sha256.New, authReq.HMACKey)
 	h.Write([]byte(authReq.ID))
@@ -906,7 +940,6 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		case responseTypeIDToken:
 			implicitOrHybrid = true
 			var err error
-
 			accessToken, _, err = s.newAccessToken(authReq.ClientID, authReq.Claims, authReq.Scopes, authReq.Nonce, authReq.ConnectorID)
 			if err != nil {
 				s.logger.Errorf("failed to create new access token: %v", err)
@@ -987,28 +1020,27 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 	if err == nil {
 		codes := strings.Split(codeCookie.Value, ",")
 		codeIDArr = append(codes, code.ID)
-		fmt.Println("*********codes: ",codes )
-		fmt.Println("*********newCodes: ",codeIDArr )
+		fmt.Println("*********codes: ", codes)
+		fmt.Println("*********newCodes: ", codeIDArr)
 
 		if len(providers) == 1 {
-			DeleteCookie(w, selProvCodesCookie) 
+			DeleteCookie(w, selProvCodesCookie)
 		} else {
 			CodeIDStr := strings.Join(codeIDArr, ",")
 			SetCookieWithValue(w, selProvCodesCookie, CodeIDStr)
 		}
 	} else {
 		// Setting cookie
-		codeIDArr = append(codeIDArr,code.ID)
+		codeIDArr = append(codeIDArr, code.ID)
 		fmt.Println("*********codeIDArr: ", codeIDArr)
 
 		if len(providers) == 1 {
-			DeleteCookie(w, selProvCodesCookie) 
+			DeleteCookie(w, selProvCodesCookie)
 		} else {
 			CodeIDStr := strings.Join(codeIDArr, ",")
 			SetCookieWithValue(w, selProvCodesCookie, CodeIDStr)
 		}
 	}
-
 
 	if len(providers) != 1 {
 		for index, provider := range providers {
@@ -1022,7 +1054,7 @@ func (s *Server) sendCodeResponse(w http.ResponseWriter, r *http.Request, authRe
 		SetCookieWithValue(w, selProvCookie, CodeIDStr)
 		http.Redirect(w, r, "/auth/selectProvider", http.StatusSeeOther)
 	} else {
-		fmt.Println("All the codes are: ",codeIDArr )
+		fmt.Println("All the codes are: ", codeIDArr)
 
 		if implicitOrHybrid {
 			q.Set("code", strings.Join(codeIDArr, ","))
@@ -1104,14 +1136,19 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	case grantTypeDeviceCode:
 		s.handleDeviceToken(w, r)
 	case grantTypeAuthorizationCode:
+		fmt.Println("Here1")
 		s.withClientFromStorage(w, r, s.handleAuthCode)
 	case grantTypeRefreshToken:
+		fmt.Println("Here2")
 		s.withClientFromStorage(w, r, s.handleRefreshToken)
 	case grantTypePassword:
+		fmt.Println("Here3")
 		s.withClientFromStorage(w, r, s.handlePasswordGrant)
 	case grantTypeTokenExchange:
+		fmt.Println("Here4")
 		s.withClientFromStorage(w, r, s.handleTokenExchange)
 	default:
+		fmt.Println("Here5")
 		s.tokenErrHelper(w, errUnsupportedGrantType, "", http.StatusBadRequest)
 	}
 }
@@ -1135,6 +1172,7 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
 	ctx := r.Context()
 	code := r.PostFormValue("code")
 	redirectURI := r.PostFormValue("redirect_uri")
+	fmt.Println("redirectURI in  handleAuthCode: ", redirectURI)
 
 	if code == "" {
 		s.tokenErrHelper(w, errInvalidRequest, `Required param: code.`, http.StatusBadRequest)
@@ -1184,6 +1222,7 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
 	}
 
 	tokenResponse, err := s.exchangeAuthCode(ctx, w, authCode, client)
+	fmt.Println("Is this access token?: ", tokenResponse)
 	if err != nil {
 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
 		return
@@ -1193,14 +1232,15 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request, client s
 
 func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, authCode storage.AuthCode, client storage.Client) (*accessTokenResponse, error) {
 	fmt.Println("Project dex exchangeAuthCode is called ********************")
-	accessToken, _, err := s.newAccessToken(client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, authCode.ConnectorID)
+	accessToken, _, err := s.newAccessToken(client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, authCode.ConnectorID, userNonce)
 	if err != nil {
 		s.logger.Errorf("failed to create new access token: %v", err)
 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)
 		return nil, err
 	}
+	fmt.Println("Project dex new accessToken generated in exchangeAuthCode: ", accessToken)
 
-	idToken, expiry, err := s.newIDToken(client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, accessToken, authCode.ID, authCode.ConnectorID)
+	idToken, expiry, err := s.newIDToken(client.ID, authCode.Claims, authCode.Scopes, authCode.Nonce, accessToken, authCode.ID, authCode.ConnectorID, userNonce)
 	if err != nil {
 		s.logger.Errorf("failed to create ID token: %v", err)
 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)

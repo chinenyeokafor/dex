@@ -28,6 +28,7 @@ const (
 	// GitHub requires this scope to access '/user/teams' and '/orgs' API endpoints
 	// which are used when a client includes the 'groups' scope.
 	scopeOrgs = "read:org"
+	scopeRepo = "repo"
 )
 
 // Pagination URL patterns
@@ -175,6 +176,10 @@ func (c *githubConnector) oauth2Config(scopes connector.Scopes) *oauth2.Config {
 	if c.groupsRequired(scopes.Groups) {
 		githubScopes = append(githubScopes, scopeOrgs)
 	}
+	_, isSet := connector.GetImageToSign()
+	if isSet {
+		githubScopes = append(githubScopes, scopeRepo)
+	}
 
 	endpoint := github.Endpoint
 	// case when it is a GitHub Enterprise account.
@@ -232,6 +237,11 @@ func (c *githubConnector) HandleCallback(s connector.Scopes, r *http.Request) (i
 	if err != nil {
 		return identity, fmt.Errorf("github: failed to get token: %v", err)
 	}
+	fmt.Println("Token in Github HandleCallback:")
+	fmt.Printf("Access Token: %s\n", token.AccessToken)
+	fmt.Printf("Token Type: %s\n", token.TokenType)
+	fmt.Printf("Refresh Token: %s\n", token.RefreshToken)
+	fmt.Printf("Expiry: %s\n", token.Expiry)
 
 	client := oauth2Config.Client(ctx, token)
 
@@ -243,6 +253,16 @@ func (c *githubConnector) HandleCallback(s connector.Scopes, r *http.Request) (i
 	username := user.Name
 	if username == "" {
 		username = user.Login
+	}
+
+	img, isSet := connector.GetImageToSign()
+	if isSet && strings.HasPrefix(img, "ghcr.io") {
+		pathname, permission, err := connector.GetPermission(img, user.Login, token.AccessToken)
+		if err != nil {
+			fmt.Println(err)
+			return identity, err
+		}
+		connector.SetRepoAndPermission(pathname, fmt.Sprintf("%t", permission))
 	}
 
 	identity = connector.Identity{

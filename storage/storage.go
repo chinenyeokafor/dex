@@ -232,7 +232,8 @@ type AuthRequest struct {
 	PKCE PKCE
 
 	// HMACKey is used when generating an AuthRequest-specific HMAC
-	HMACKey []byte
+	HMACKey   []byte
+	UserNonce string
 }
 
 // AuthCode represents a code which can be exchanged for an OAuth2 token response.

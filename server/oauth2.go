@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -295,18 +296,30 @@ type idTokenClaims struct {
 	PreferredUsername string `json:"preferred_username,omitempty"`
 
 	FederatedIDClaims *federatedIDClaims `json:"federated_claims,omitempty"`
+	SigningScope      *signingScope      `json:"signing_scope,omitempty"`
+	User_Challenge    string             `json:"user_challenge,omitempty"`
 }
 
 type federatedIDClaims struct {
 	ConnectorID string `json:"connector_id,omitempty"`
 	UserID      string `json:"user_id,omitempty"`
 }
+type signingScope struct {
+	ArtifactRepo   string `json:"artifact_repo`
+	PushPermission string `json:"push_access`
+}
 
-func (s *Server) newAccessToken(clientID string, claims storage.Claims, scopes []string, nonce, connID string) (accessToken string, expiry time.Time, err error) {
+func (s *Server) newAccessToken(clientID string, claims storage.Claims, scopes []string, nonce, connID string, userNonce ...string) (accessToken string, expiry time.Time, err error) {
+	var userNonceStr string
+	if len(userNonce) > 0 {
+		userNonceStr = userNonce[0]
+		return s.newIDToken(clientID, claims, scopes, nonce, storage.NewID(), "", connID, userNonceStr)
+	}
+	fmt.Println("Token? storage.NewID(): ", storage.NewID())
 	return s.newIDToken(clientID, claims, scopes, nonce, storage.NewID(), "", connID)
 }
 
-func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []string, nonce, accessToken, code, connID string) (idToken string, expiry time.Time, err error) {
+func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []string, nonce, accessToken, code, connID string, userNonce ...string) (idToken string, expiry time.Time, err error) {
 	keys, err := s.storage.GetKeys()
 	if err != nil {
 		s.logger.Errorf("Failed to get keys: %v", err)
@@ -325,9 +338,24 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 	issuedAt := s.now()
 	expiry = issuedAt.Add(s.idTokensValidFor)
 
+	//ToDo: get ConnURL from connecture Issure in dex config
+	var connURL string
+	if connID != "" {
+		switch connID {
+		case "google-sigstore-test":
+			connURL = "https://accounts.google.com"
+		case "microsoft-sigstore-test":
+			connURL = "https://login.microsoftonline.com"
+		case "github-sigstore-test":
+			connURL = "https://github.com/login/oauth"
+		default:
+			connURL = "https://oauth2.testtide.xyz/auth"
+		}
+	}
+
 	sub := &internal.IDTokenSubject{
 		UserId: claims.UserID,
-		ConnId: connID,
+		ConnId: connURL,
 	}
 
 	subjectString, err := internal.Marshal(sub)
@@ -335,16 +363,23 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 		s.logger.Errorf("failed to marshal offline session ID: %v", err)
 		return "", expiry, fmt.Errorf("failed to marshal offline session ID: %v", err)
 	}
+	var userNonceStr string
+	if len(userNonce) > 0 {
+		userNonceStr = userNonce[0]
+	}
 
 	tok := idTokenClaims{
-		Issuer:   s.issuerURL.String(),
-		Subject:  subjectString,
-		Nonce:    nonce,
-		Expiry:   expiry.Unix(),
-		IssuedAt: issuedAt.Unix(),
+		Issuer:         s.issuerURL.String(),
+		Subject:        subjectString,
+		Nonce:          nonce,
+		Expiry:         expiry.Unix(),
+		IssuedAt:       issuedAt.Unix(),
+		User_Challenge: userNonceStr,
 	}
 
 	if accessToken != "" {
+
+		fmt.Println("accessToken?: ", accessToken)
 		atHash, err := accessTokenHash(signingAlg, accessToken)
 		if err != nil {
 			s.logger.Errorf("error computing at_hash: %v", err)
@@ -361,6 +396,14 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 		}
 		tok.CodeHash = cHash
 	}
+	fmt.Println("code???: ", code)
+	// Using reflection to print all field names and values
+	v := reflect.ValueOf(claims)
+	typeOfS := v.Type()
+
+	for i := 0; i < v.NumField(); i++ {
+		fmt.Printf("%s: %v\n", typeOfS.Field(i).Name, v.Field(i).Interface())
+	}
 
 	for _, scope := range scopes {
 		switch {
@@ -372,9 +415,10 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 		case scope == scopeProfile:
 			tok.Name = claims.Username
 			tok.PreferredUsername = claims.PreferredUsername
+			tok.Groups = claims.Groups
 		case scope == scopeFederatedID:
 			tok.FederatedIDClaims = &federatedIDClaims{
-				ConnectorID: connID,
+				ConnectorID: connURL,
 				UserID:      claims.UserID,
 			}
 		default:
@@ -410,6 +454,15 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 		// The current client becomes the authorizing party.
 		tok.AuthorizingParty = clientID
 	}
+	repo, permission := connector.GetRepoAndPermission()
+	fmt.Println("********************claims.Repo: ", repo)
+	fmt.Println("********************claims.PushPermission: ", permission)
+	if repo != "" && permission != "" {
+		tok.SigningScope = &signingScope{
+			ArtifactRepo:   repo,
+			PushPermission: permission,
+		}
+	}
 
 	payload, err := json.Marshal(tok)
 	if err != nil {
@@ -435,6 +488,11 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
 
 	clientID := q.Get("client_id")
 	state := q.Get("state")
+	u_nonce := q.Get("u_nonce")
+	fmt.Println("u_nonce", u_nonce)
+	image := q.Get("image")
+	fmt.Println("connector.SetImageToSign(image):", image)
+	connector.SetImageToSign(image)
 	nonce := q.Get("nonce")
 	connectorID := q.Get("connector_id")
 	// Some clients, like the old go-oidc, provide extra whitespace. Tolerate this.
@@ -590,7 +648,8 @@ func (s *Server) parseAuthorizationRequest(r *http.Request) (*storage.AuthReques
 			CodeChallenge:       codeChallenge,
 			CodeChallengeMethod: codeChallengeMethod,
 		},
-		HMACKey: storage.NewHMACKey(crypto.SHA256),
+		HMACKey:   storage.NewHMACKey(crypto.SHA256),
+		UserNonce: u_nonce,
 	}, nil
 }
 

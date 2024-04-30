@@ -429,7 +429,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		switch conn := conn.Connector.(type) {
 		case connector.CallbackConnector:
-			fmt.Println("Hereeeee1")
 
 			// Use the auth request ID as the "state" token.
 			//
@@ -440,7 +439,6 @@ func (s *Server) handleConnectorLogin(w http.ResponseWriter, r *http.Request) {
 				s.renderError(r, w, http.StatusInternalServerError, "Login error.")
 				return
 			}
-			fmt.Println("Hereeeee1 callbackURL", callbackURL)
 			http.Redirect(w, r, callbackURL, http.StatusFound)
 		case connector.PasswordConnector:
 			loginURL := url.URL{
@@ -645,7 +643,6 @@ func (s *Server) handleConnectorCallback(w http.ResponseWriter, r *http.Request)
 	var identity connector.Identity
 	switch conn := conn.Connector.(type) {
 	case connector.CallbackConnector:
-		fmt.Println("Hereeeee1a")
 		if r.Method != http.MethodGet {
 			s.logger.Errorf("SAML request mapped to OAuth2 connector")
 			s.renderError(r, w, http.StatusBadRequest, "Invalid request")
@@ -1248,6 +1245,7 @@ func (s *Server) exchangeAuthCode(ctx context.Context, w http.ResponseWriter, au
 	}
 	fmt.Println("Project dex idToken generated in exchangeAuthCode: ", idToken)
 
+	connector.SetRepoAndPermission("", "") //reset values
 	if err := s.storage.DeleteAuthCode(authCode.ID); err != nil {
 		s.logger.Errorf("failed to delete auth code: %v", err)
 		s.tokenErrHelper(w, errServerError, "", http.StatusInternalServerError)

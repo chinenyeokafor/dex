@@ -17,7 +17,6 @@ func SetImageToSign(img string) {
 
 func GetImageToSign() (string, bool) {
 	if ImageToSign != "" {
-		fmt.Println("server.ImageToSign gotten is: ", ImageToSign)
 		return ImageToSign, true
 	}
 	return "", false
